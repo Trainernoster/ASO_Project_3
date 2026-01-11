@@ -535,15 +535,15 @@ class Optimiser:
             # Calculate new p_k for equality constriants
             for j in range(self.problem.me):
                 # Get equality constraint vector
-                inequality_list = [j + self.problem.m]
+                equality_list = [j + self.problem.m]
                 list_equality.append(j + self.problem.m)
                 dh_dx = self.problem.compute_grad_constraints(
                     x= self.get_history(0),
-                    selection= inequality_list
+                    selection= equality_list
                 )
                 for i in range(self.n):
                     # p_k
-                    self.p[i, j] = (1/2)*(self.U_k[i] - self.get_history(0)[i])**2 * dh_dx[0, i]
+                    self.p[i, j + self.problem.m] = (1/2)*(self.U_k[i] - self.get_history(0)[i])**2 * dh_dx[0, i]
             
             ###
             ### Calculate new parameters
@@ -614,7 +614,7 @@ class Optimiser:
         for j in range(self.problem.me):
             re_dif_j = 0
             for i in range(self.n):
-                re_dif_j += ((self.p[i, j]/(self.U_k[i] - _x[i])) - (self.p[i, j]/(_x[i]- self.L_k[i])))
+                re_dif_j += ((self.p[i, j + self.problem.m]/(self.U_k[i] - _x[i])) - (self.p[i, j + self.problem.m]/(_x[i]- self.L_k[i])))
             re_dif[j] = re_dif_j
         return self.re_k + re_dif
     
