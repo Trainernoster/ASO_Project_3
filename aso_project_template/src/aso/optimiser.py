@@ -77,6 +77,7 @@ class Optimiser:
         self.L_k = np.zeros(self.n)
         self.U_k = np.zeros(self.n)
         self.scaling_factor = 10
+        self.update_scaling_factor = 1.2
 
         # Paramters for objective
         self.p0_k = np.zeros(self.n)
@@ -342,7 +343,6 @@ class Optimiser:
             Callback function to collect intermediate results.
         """
 
-        self.lm = np.array([1, 2, 3])
         ### Helper
         one_step =  np.array([1.81813691, 0.83329358, 0.0, 1.0, 0.18186309]) - self.x
         norm_one_step = np.abs(one_step)
@@ -370,10 +370,7 @@ class Optimiser:
             L_prime_prime = self.finite_differencing_lagrange(_lm = self.lm)              # Second derivative of lagrange
 
             ### calculate the approximation parameters
-            self.calculate_approximation_parameters(
-                _L_prime= L_prime,
-                _L_prime_prime= L_prime_prime
-            )
+            self.calculate_approximation_parameters()
 
             _x = np.array([1, 1, 0.8, 1, 1])
             dual = self.compute_dual_function(_x= _x)
@@ -441,7 +438,7 @@ class Optimiser:
             ):
                 return k
             k += 1
-        return 1
+        return -1
     
     # ------------------------------------------------------------------ #
     # Finite Differencing
@@ -468,15 +465,17 @@ class Optimiser:
     # Calculate approximtion parameters
     # Saves the approximation parameters in self.*
     # ------------------------------------------------------------------ #
-    def calculate_approximation_parameters(
-        self,
-        _L_prime,
-        _L_prime_prime
-    ) -> None:
+    def calculate_approximation_parameters(self) -> None:
         ### Loacal variables
         delta = np.zeros(self.n)
         _lm = self.lm[:self.problem.m]
         _mu = self.lm[self.problem.m:] 
+        _L_prime = self.problem.compute_grad_lagrange_function(x= self.x, lm= self.lm) # First derivative of lagrange
+        _L_prime_prime = self.finite_differencing_lagrange(_lm = self.lm)              # Second derivative of lagrange
+
+        ###
+        ### Calculate Bounds
+        ###
 
         # Calculate delta
         for i in range(self.n):
@@ -494,73 +493,106 @@ class Optimiser:
             except:
                 delta[i] = 1
         
-        # Scaling delta (info from Lecture)
-        delta *= self.scaling_factor
+        # Scaling delta (info from Lecture)         ####################################################################################################################################################################################################################
+        delta *= self.scaling_factor                # Scale up delta correct (blow up the dualfunction)
         
-        # Calculate asymptotes distances
-        self.L_k = self.get_history(0) - delta
-        self.U_k = self.get_history(0) + delta
-        
-        # Calculate objective parameters
-        for i in range(self.n):
-            _p_lm = self.p[i,:self.problem.m]
-            _p_mu = self.p[i,self.problem.m:]
-            _q_lm = self.q[i]
-            p0i_k = (1/4) * delta[i]**3 * _L_prime_prime[i] + (1/2) * delta[i]**2 * _L_prime[i] - _lm @ _p_lm - _mu @ _p_mu
-            q0i_k = (1/4) * delta[i]**3 * _L_prime_prime[i] - (1/2) * delta[i]**2 * _L_prime[i] - _lm @ _q_lm + _mu @ _p_mu
-            self.p0_k[i] = p0i_k
-            self.q0_k[i] = q0i_k
+        ###
+        ### Loop until all inequalities are in feasable
+        ###
+        while True:
 
-        list_inequality = []
-        list_equality = []
-        # Calculate new p_k and q_k for inequality constriants
-        for j in range(self.problem.m):
-            # Get inequality constraint vector
-            inequality_list = [j]
-            list_inequality.append(j)
-            dg_dx = self.problem.compute_grad_constraints(
-                x= self.get_history(0),
-                selection= inequality_list
-            )
-            for i in range(self.n):
-                if dg_dx[0, i] > 0:
+            # Calculate asymptotes distances
+            self.L_k = self.get_history(0) - delta
+            self.U_k = self.get_history(0) + delta
+
+            ###
+            ### Update pji and qji      #####################################################################################################################################################################################################################################
+            ###                         When should we update the pji and qji matrices
+            
+            list_inequality = []
+            list_equality = []
+            # Calculate new p_k and q_k for inequality constriants
+            for j in range(self.problem.m):
+                # Get inequality constraint vector
+                inequality_list = [j]
+                list_inequality.append(j)
+                dg_dx = self.problem.compute_grad_constraints(
+                    x= self.get_history(0),
+                    selection= inequality_list
+                )
+                for i in range(self.n):
+                    if dg_dx[0, i] > 0:
+                        # p_k
+                        self.p[i, j] = (self.U_k[i] - self.get_history(0)[i])**2 * dg_dx[0, i]
+                        # q_k
+                        self.q[i, j] = 0
+                    else:
+                        # p_k
+                        self.p[i, j] = 0
+                        # q_k
+                        self.q[i, j] = (self.get_history(0)[i] - self.L_k[i])**2 * dg_dx[0, i]
+            
+            # Calculate new p_k for equality constriants
+            for j in range(self.problem.me):
+                # Get equality constraint vector
+                inequality_list = [j + self.problem.m]
+                list_equality.append(j + self.problem.m)
+                dh_dx = self.problem.compute_grad_constraints(
+                    x= self.get_history(0),
+                    selection= inequality_list
+                )
+                for i in range(self.n):
                     # p_k
-                    self.p[i, j] = (self.U_k[i] - self.get_history(0)[i])**2 * dg_dx[0, i]
-                    # q_k
-                    self.q[i, j] = 0
-                else:
-                    # p_k
-                    self.p[i, j] = 0
-                    # q_k
-                    self.q[i, j] = (self.get_history(0)[i] - self.L_k[i])**2 * dg_dx[0, i]
-        
-        # Calculate new p_k for equality constriants
-        for j in range(self.problem.me):
-            # Get equality constraint vector
-            inequality_list = [j + self.problem.m]
-            list_equality.append(j + self.problem.m)
-            dh_dx = self.problem.compute_grad_constraints(
-                x= self.get_history(0),
-                selection= inequality_list
-            )
+                    self.p[i, j] = (1/2)*(self.U_k[i] - self.get_history(0)[i])**2 * dh_dx[0, i]
+            
+            ###
+            ### Calculate new parameters
+            ###
+
+            # Calculate objective parameters
             for i in range(self.n):
-                # p_k
-                self.p[i, j] = (1/2)*(self.U_k[i] - self.get_history(0)[i])**2 * dh_dx[0, i]
-        
-        # Calculate r´s for approximation functions
-        ro_dif = 0
-        for i in range(self.n):
-            ro_dif += ((self.p0_k[i]/(self.U_k[i] - self.get_history(0)[i])) - (self.q0_k[i]/(self.get_history(0)[i] - self.L_k[i])))
-        ri_dif = np.zeros(self.problem.m)
-        for j in range(self.problem.m):
+                _p_lm = self.p[i,:self.problem.m]
+                _p_mu = self.p[i,self.problem.m:]
+                _q_lm = self.q[i]
+                p0i_k = (1/4) * delta[i]**3 * _L_prime_prime[i] + (1/2) * delta[i]**2 * _L_prime[i] - _lm @ _p_lm - _mu @ _p_mu
+                q0i_k = (1/4) * delta[i]**3 * _L_prime_prime[i] - (1/2) * delta[i]**2 * _L_prime[i] - _lm @ _q_lm + _mu @ _p_mu
+                self.p0_k[i] = p0i_k
+                self.q0_k[i] = q0i_k
+
+            # Calculate r´s for approximation functions
+            ro_dif = 0
             for i in range(self.n):
-                ri_dif += ((self.p[i, j]/(self.U_k[i] - self.get_history(0)[i])) + (self.q[i, j]/(self.get_history(0)[i] - self.L_k[i])))   # Use + instead of OR since one is always 0
-        self.ro_k = self.problem.compute_objective(x= self.get_history(0)) - ro_dif
-        self.ri_k = self.problem.compute_constraints(x= self.get_history(0), selection= list_inequality) - ri_dif
-        self.re_k = self.problem.compute_constraints(x= self.get_history(0), selection= list_equality)
+                ro_dif += ((self.p0_k[i]/(self.U_k[i] - self.get_history(0)[i])) - (self.q0_k[i]/(self.get_history(0)[i] - self.L_k[i])))
+            ri_dif = np.zeros(self.problem.m)
+            for j in range(self.problem.m):
+                for i in range(self.n):
+                    ri_dif += ((self.p[i, j]/(self.U_k[i] - self.get_history(0)[i])) + (self.q[i, j]/(self.get_history(0)[i] - self.L_k[i])))   # Use + instead of OR since one is always 0
+            self.ro_k = self.problem.compute_objective(x= self.get_history(0)) - ro_dif
+            self.ri_k = self.problem.compute_constraints(x= self.get_history(0), selection= list_inequality) - ri_dif
+            self.re_k = self.problem.compute_constraints(x= self.get_history(0), selection= list_equality)
+
+            ##############################################################################################################################################################################################################################################################################
+            ### Get roots of the inequalities and update delta if necessary 
+            is_feasable = True
+            for j in range(self.problem.m):
+                for i in range(self.n):
+                    if self.p[i, j] == 0:
+                        # Check q part
+                        root = self.L_k[i] - (self.q[i, j]/self.ri_k[j])
+                        if root > self.U_k[i]:
+                            delta[i] = (root - self.get_history(0)[i]) * self.update_scaling_factor
+                            is_feasable = False
+                    else:
+                        # Check p part
+                        root = self.U_k[i] + (self.p[i, j]/self.ri_k[j])
+                        if root < self.L_k[i]:
+                            delta[i] = (self.get_history(0)[i] - root) * self.update_scaling_factor
+                            is_feasable = False
+
+            if is_feasable: break
 
     # ------------------------------------------------------------------ #
-    # Dual-Function approximation
+    # Approximated Lagrange
     # ------------------------------------------------------------------ #
     def _approximated_objective_function(self, _x: NDArray) -> float:
         ro_dif = 0
@@ -586,19 +618,37 @@ class Optimiser:
             re_dif[j] = re_dif_j
         return self.re_k + re_dif
     
-    def _check_bounds(_x) -> None:
-        ...
-
-    def compute_dual_function(self, _x: NDArray) -> int:
-        self._check_bounds(_x= _x)
-        dual_function = self._approximated_objective_function(_x= _x)
+    def compute_approximated_lagrange(self, _x: NDArray) -> float:
+        lagrange_function = self._approximated_objective_function(_x= _x)
         inequality_functions = self._approximated_inequality_function(_x= _x)
         equality_functions = self._approximated_equality_function(_x= _x)
         for _ in range(self.problem.m):
-            dual_function += self.lm[_] * inequality_functions[_]
+            lagrange_function += self.lm[_] * inequality_functions[_]
         for _ in range(self.problem.me):
-            dual_function += self.lm[_ + self.problem.m] * equality_functions[_]
-        return dual_function
+            lagrange_function += self.lm[_ + self.problem.m] * equality_functions[_]
+        return lagrange_function
+
+    # ------------------------------------------------------------------ #
+    # Dual-Function approximation
+    # ------------------------------------------------------------------ #
+    def compute_dual_function(self) -> float:
+        Pi = np.zeros(self.n)
+        Qi = np.zeros(self.n)
+        for i in range(self.n):
+            p_lm = 0
+            q_lm = 0
+            pp_mu = 0
+            pq_mu = 0
+            for _ in range(self.problem.m):
+                p_lm += self.lm[_] * self.p[i, _]
+                q_lm += self.lm[_] * self.q[i, _]
+            for _ in range(self.problem.me):
+                pp_mu += self.lm[_ + self.problem.m] * self.p[i, _ + self.problem.m]
+                pq_mu += self.lm[_ + self.problem.m] * self.p[i, _ + self.problem.m]
+            Pi[i] = self.p0_k[i]
+            Qi[i] = self.q0_k[i]
+            ...
+
     
     def compute_grad_dual_function() -> int:
         ...
